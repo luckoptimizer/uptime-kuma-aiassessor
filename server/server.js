@@ -20,7 +20,7 @@ const defaultMonitors = [
   },
   {
     id: 2,
-    name: 'Supabase Edge Functions',
+    name: 'Supabase Health Check',
     type: 'http',
     target: 'https://ctxcznwnjliuywwucamr.supabase.co/functions/v1/health',
     interval: 60,
