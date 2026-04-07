@@ -22,7 +22,7 @@ const defaultMonitors = [
     id: 2,
     name: 'Supabase Edge Functions',
     type: 'http',
-    target: 'https://your-project.supabase.co/functions/v1/health',
+    target: 'https://ctxcznwnjliuywwucamr.supabase.co/functions/v1/health',
     interval: 60,
     paused: false
   },
