@@ -1,7 +1,8 @@
 const express = require('express');
 const path = require('path');
 const app = express();
-const port = process.env.PORT || 3001;
+const port = parseInt(process.env.PORT, 10) || 3001;
+const host = '0.0.0.0';
 
 app.use(express.json());
 
@@ -30,6 +31,6 @@ app.get('*', (req, res) => {
   res.sendFile(path.join(__dirname, '../dist/index.html'));
 });
 
-app.listen(port, () => {
+app.listen(port, host, () => {
   console.log(`Server running on port ${port}`);
 });
