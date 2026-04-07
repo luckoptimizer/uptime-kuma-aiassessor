@@ -8,6 +8,42 @@ const host = '0.0.0.0';
 const adminFile = path.join(__dirname, 'admin.json');
 const monitorsFile = path.join(__dirname, 'monitors.json');
 
+// Real AI Assessor Monitors
+const defaultMonitors = [
+  {
+    id: 1,
+    name: 'AI Assessor Main App',
+    type: 'http',
+    target: 'https://aiassessorplatformdesign-qsb9.vercel.app',
+    interval: 60,
+    paused: false
+  },
+  {
+    id: 2,
+    name: 'Supabase Edge Functions',
+    type: 'http',
+    target: 'https://your-project.supabase.co/functions/v1/health',
+    interval: 60,
+    paused: false
+  },
+  {
+    id: 3,
+    name: 'n8n Automation Engine',
+    type: 'http',
+    target: 'https://your-n8n.onrender.com',
+    interval: 120,
+    paused: false
+  },
+  {
+    id: 4,
+    name: 'Database Health',
+    type: 'database',
+    target: 'postgres',
+    interval: 300,
+    paused: false
+  }
+];
+
 function isAdminCreated() {
   return fs.existsSync(adminFile);
 }
@@ -24,14 +60,14 @@ function getAdmin() {
 
 function loadMonitors() {
   if (!fs.existsSync(monitorsFile)) {
-    return [];
+    return defaultMonitors;
   }
 
   try {
-    return JSON.parse(fs.readFileSync(monitorsFile, 'utf-8')) || [];
+    return JSON.parse(fs.readFileSync(monitorsFile, 'utf-8')) || defaultMonitors;
   } catch (error) {
     console.error('Failed to read monitors file:', error);
-    return [];
+    return defaultMonitors;
   }
 }
 
@@ -46,6 +82,7 @@ function saveMonitors(monitors) {
 }
 
 async function performMonitorCheck(monitor) {
+  const type = (monitor.type || '').toString().toLowerCase();
   const result = {
     ...monitor,
     status: 'offline',
@@ -59,7 +96,7 @@ async function performMonitorCheck(monitor) {
     return result;
   }
 
-  if (monitor.type === 'HTTP') {
+  if (type === 'http') {
     const start = Date.now();
 
     try {
@@ -73,7 +110,7 @@ async function performMonitorCheck(monitor) {
       result.responseTimeMs = Date.now() - start;
       result.status = 'offline';
     }
-  } else if (monitor.type === 'TLS') {
+  } else if (type === 'tls') {
     const target = monitor.target.startsWith('http') ? monitor.target : `https://${monitor.target}`;
     const start = Date.now();
 
@@ -88,7 +125,7 @@ async function performMonitorCheck(monitor) {
       result.responseTimeMs = Date.now() - start;
       result.status = 'offline';
     }
-  } else if (monitor.type === 'Database') {
+  } else if (type === 'database') {
     try {
       fs.accessSync(monitor.target, fs.constants.R_OK);
       result.status = 'online';
