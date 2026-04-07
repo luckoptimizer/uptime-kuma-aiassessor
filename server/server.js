@@ -22,7 +22,7 @@ const defaultMonitors = [
     id: 2,
     name: 'Supabase Health Check',
     type: 'http',
-    target: 'https://ctxcznwnjliuywwucamr.supabase.co/functions/v1/health',
+    target: 'https://ctxcznwnjliuywwucamr.supabase.co/functions/v1/health-import',
     interval: 60,
     paused: false
   },

@@ -14,20 +14,19 @@ serve(async (req) => {
   }
 
   try {
+    // For public health checks, we'll skip authentication
     // Check database connectivity
     const { createClient } = await import("https://esm.sh/@supabase/supabase-js@2")
     const supabaseUrl = Deno.env.get('SUPABASE_URL')!
-    const supabaseKey = Deno.env.get('SUPABASE_ANON_KEY')!
+    const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')! // Use service key for internal checks
 
-    const supabase = createClient(supabaseUrl, supabaseKey)
+    const supabase = createClient(supabaseUrl, supabaseServiceKey)
 
-    // Simple health check - try to get current timestamp
+    // Simple health check - try to get current timestamp or check a system table
     const { data, error } = await supabase
-      .from('_health_check')
-      .select('*')
-      .limit(1)
+      .rpc('version') // This is a built-in PostgreSQL function that should always work
 
-    if (error && !error.message.includes('relation "_health_check" does not exist')) {
+    if (error) {
       throw error
     }
 
@@ -39,7 +38,6 @@ serve(async (req) => {
         database: 'operational',
         edge_functions: 'operational'
       },
-      uptime: 'unknown', // Could be enhanced with more metrics
       version: '1.0.0'
     }
 
