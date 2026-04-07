@@ -58,6 +58,21 @@ app.get('/api/admin', (req, res) => {
   res.json({ username: admin.username });
 });
 
+app.get('/api/dashboard', (req, res) => {
+  const admin = getAdmin();
+  res.json({
+    status: 'online',
+    uptimeSeconds: Math.floor(process.uptime()),
+    adminUser: admin?.username || null,
+    nodeVersion: process.version,
+    platform: process.platform,
+    monitoredServices: 0,
+    activeChecks: 0,
+    alerts: 0,
+    lastUpdated: new Date().toISOString()
+  });
+});
+
 // API health check
 app.get('/api/health', (req, res) => {
   res.json({ status: 'running' });

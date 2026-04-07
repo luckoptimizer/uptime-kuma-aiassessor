@@ -34,9 +34,44 @@
             </div>
         </div>
         <div v-else class="dashboard">
-            <h1>{{ adminName ? 'Welcome back, ' + adminName + '!' : 'Welcome to Uptime Kuma AI Assessor' }}</h1>
-            <p>Your admin account is configured successfully.</p>
-            <p>Dashboard functionality will be added soon.</p>
+            <div class="dashboard-header">
+                <div>
+                    <h1>{{ adminName ? 'Welcome back, ' + adminName + '!' : 'Welcome to Uptime Kuma AI Assessor' }}</h1>
+                    <p>Your admin account is configured successfully.</p>
+                </div>
+                <div class="status-pill" :class="dashboardStats?.status === 'online' ? 'online' : 'offline'">
+                    {{ dashboardStats ? dashboardStats.status.toUpperCase() : 'LOADING' }}
+                </div>
+            </div>
+
+            <div v-if="dashboardLoading" class="dashboard-loading">Loading dashboard...</div>
+            <div v-else class="dashboard-grid">
+                <div class="card">
+                    <h2>System Uptime</h2>
+                    <p>{{ formatUptime(dashboardStats.uptimeSeconds) }}</p>
+                </div>
+                <div class="card">
+                    <h2>Active Checks</h2>
+                    <p>{{ dashboardStats.activeChecks }}</p>
+                </div>
+                <div class="card">
+                    <h2>Monitored Services</h2>
+                    <p>{{ dashboardStats.monitoredServices }}</p>
+                </div>
+                <div class="card">
+                    <h2>Current Alerts</h2>
+                    <p>{{ dashboardStats.alerts }}</p>
+                </div>
+                <div class="card wide-card">
+                    <h2>Environment</h2>
+                    <p>Node {{ dashboardStats.nodeVersion }}</p>
+                    <p>{{ dashboardStats.platform }}</p>
+                </div>
+                <div class="card wide-card">
+                    <h2>Last Updated</h2>
+                    <p>{{ dashboardStats.lastUpdated }}</p>
+                </div>
+            </div>
         </div>
     </div>
 </template>
@@ -50,6 +85,8 @@ export default {
         return {
             adminExists: false,
             adminName: '',
+            dashboardStats: null,
+            dashboardLoading: false,
             loading: false,
             error: '',
             success: '',
@@ -70,6 +107,7 @@ export default {
 
                 if (this.adminExists) {
                     await this.loadAdminInfo();
+                    await this.loadDashboardStats();
                 }
             } catch (e) {
                 console.error('Error checking admin status:', e);
@@ -82,6 +120,27 @@ export default {
                 this.adminName = response.data.username || '';
             } catch (e) {
                 console.error('Error loading admin info:', e);
+            }
+        },
+        async loadDashboardStats() {
+            this.dashboardLoading = true;
+            try {
+                const response = await axios.get('/api/dashboard');
+                this.dashboardStats = response.data;
+            } catch (e) {
+                console.error('Error loading dashboard:', e);
+                this.dashboardStats = {
+                    status: 'offline',
+                    uptimeSeconds: 0,
+                    activeChecks: 0,
+                    monitoredServices: 0,
+                    alerts: 0,
+                    nodeVersion: '',
+                    platform: '',
+                    lastUpdated: ''
+                };
+            } finally {
+                this.dashboardLoading = false;
             }
         },
         async createAdmin() {
@@ -100,11 +159,18 @@ export default {
                 this.form.password = '';
                 this.adminExists = true;
                 this.adminName = response.data.username || '';
+                await this.loadDashboardStats();
             } catch (error) {
                 this.error = error.response?.data?.error || 'Error creating admin account';
             } finally {
                 this.loading = false;
             }
+        },
+        formatUptime(seconds) {
+            const hrs = Math.floor(seconds / 3600);
+            const mins = Math.floor((seconds % 3600) / 60);
+            const secs = seconds % 60;
+            return `${hrs}h ${mins}m ${secs}s`;
         }
     }
 };
@@ -193,6 +259,76 @@ button:hover:not(:disabled) {
 button:disabled {
     background-color: #cccccc;
     cursor: not-allowed;
+}
+
+.dashboard {
+    width: 100%;
+    max-width: 1000px;
+    padding: 2rem;
+}
+
+.dashboard-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 1rem;
+    margin-bottom: 1.5rem;
+    flex-wrap: wrap;
+}
+
+.status-pill {
+    padding: 0.75rem 1rem;
+    border-radius: 999px;
+    font-weight: bold;
+    color: white;
+    min-width: 120px;
+    text-align: center;
+}
+
+.status-pill.online {
+    background-color: #2e7d32;
+}
+
+.status-pill.offline {
+    background-color: #c62828;
+}
+
+.dashboard-loading {
+    padding: 2rem;
+    font-size: 1rem;
+    color: #666;
+    text-align: center;
+}
+
+.dashboard-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 1rem;
+}
+
+.card {
+    background: white;
+    border-radius: 12px;
+    box-shadow: 0 2px 12px rgba(0, 0, 0, 0.06);
+    padding: 1.5rem;
+    text-align: left;
+}
+
+.card h2 {
+    margin: 0 0 0.75rem;
+    font-size: 1rem;
+    color: #333;
+}
+
+.card p {
+    margin: 0;
+    font-size: 1.5rem;
+    color: #111;
+    word-break: break-word;
+}
+
+.wide-card {
+    grid-column: span 2;
 }
 
 .error {
