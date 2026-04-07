@@ -14,30 +14,15 @@ serve(async (req) => {
   }
 
   try {
-    // For public health checks, we'll skip authentication
-    // Check database connectivity
-    const { createClient } = await import("https://esm.sh/@supabase/supabase-js@2")
-    const supabaseUrl = Deno.env.get('SUPABASE_URL')!
-    const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')! // Use service key for internal checks
-
-    const supabase = createClient(supabaseUrl, supabaseServiceKey)
-
-    // Simple health check - try to get current timestamp or check a system table
-    const { data, error } = await supabase
-      .rpc('version') // This is a built-in PostgreSQL function that should always work
-
-    if (error) {
-      throw error
-    }
-
-    // Return health status
+    // Simple health check - no database access required for basic monitoring
+    // This ensures the function itself is operational
     const healthData = {
       status: 'healthy',
       timestamp: new Date().toISOString(),
       services: {
-        database: 'operational',
         edge_functions: 'operational'
       },
+      message: 'Supabase Edge Functions are operational',
       version: '1.0.0'
     }
 
@@ -60,8 +45,7 @@ serve(async (req) => {
       timestamp: new Date().toISOString(),
       error: error.message,
       services: {
-        database: 'unknown',
-        edge_functions: 'operational'
+        edge_functions: 'error'
       }
     }
 
