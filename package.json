@@ -1,0 +1,27 @@
+{
+  "name": "uptime-kuma",
+  "version": "1.0.0",
+  "description": "A self-hosted monitoring tool",
+  "main": "server/server.js",
+  "scripts": {
+    "start": "node server/server.js",
+    "build": "vite build"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "dependencies": {
+    "express": "^4.18.0",
+    "socket.io": "^4.7.0",
+    "sqlite3": "^5.1.0",
+    "axios": "^1.6.0",
+    "dayjs": "^1.11.0",
+    "redbean-node": "^0.3.0"
+  },
+  "devDependencies": {
+    "vite": "^4.0.0",
+    "@vitejs/plugin-vue": "^4.0.0",
+    "vue": "^3.0.0",
+    "eslint": "^8.0.0"
+  }
+}
