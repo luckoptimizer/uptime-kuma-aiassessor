@@ -34,8 +34,9 @@
             </div>
         </div>
         <div v-else class="dashboard">
-            <h1>Welcome to Uptime Kuma AI Assessor</h1>
-            <p>Dashboard coming soon...</p>
+            <h1>{{ adminName ? 'Welcome back, ' + adminName + '!' : 'Welcome to Uptime Kuma AI Assessor' }}</h1>
+            <p>Your admin account is configured successfully.</p>
+            <p>Dashboard functionality will be added soon.</p>
         </div>
     </div>
 </template>
@@ -48,6 +49,7 @@ export default {
     data() {
         return {
             adminExists: false,
+            adminName: '',
             loading: false,
             error: '',
             success: '',
@@ -63,11 +65,23 @@ export default {
     methods: {
         async checkAdminExists() {
             try {
-                const response = await axios.get('/api/health');
-                // If admin setup is needed, show the form
-                this.adminExists = false;
+                const response = await axios.get('/api/admin/exists');
+                this.adminExists = response.data.exists;
+
+                if (this.adminExists) {
+                    await this.loadAdminInfo();
+                }
             } catch (e) {
                 console.error('Error checking admin status:', e);
+                this.adminExists = false;
+            }
+        },
+        async loadAdminInfo() {
+            try {
+                const response = await axios.get('/api/admin');
+                this.adminName = response.data.username || '';
+            } catch (e) {
+                console.error('Error loading admin info:', e);
             }
         },
         async createAdmin() {
@@ -85,11 +99,7 @@ export default {
                 this.form.username = '';
                 this.form.password = '';
                 this.adminExists = true;
-                
-                // Redirect to dashboard after 2 seconds
-                setTimeout(() => {
-                    // Dashboard would go here
-                }, 2000);
+                this.adminName = response.data.username || '';
             } catch (error) {
                 this.error = error.response?.data?.error || 'Error creating admin account';
             } finally {
