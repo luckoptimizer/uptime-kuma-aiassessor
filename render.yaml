@@ -1,0 +1,28 @@
+# Render IaC for status.aiassessor.ca
+# Free plan: spins down after 15 min idle (no true 99.9% SLA).
+# Upgrade to Starter ($7/mo) + persistent disk if you need a real SLA.
+services:
+  - type: web
+    name: status-aiassessor
+    runtime: docker
+    plan: free
+    region: oregon
+    branch: main
+    autoDeploy: true
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 3001
+      # --- secrets: set these in Render dashboard, do NOT commit ---
+      - key: ADMIN_USERNAME
+        sync: false
+      - key: ADMIN_PASSWORD_HASH
+        sync: false
+      - key: SESSION_SECRET
+        generateValue: true
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false

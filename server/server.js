@@ -1,318 +1,489 @@
+/* eslint-disable no-console */
+/**
+ * status.aiassessor.ca - Express backend
+ *
+ * Auth model
+ *   - Admin credentials come from env vars (ADMIN_USERNAME, ADMIN_PASSWORD_HASH).
+ *     This is ephemeral-disk-safe: Render free plan wipes the container's disk
+ *     on every restart/deploy, so we cannot persist admin to a JSON file.
+ *   - Login issues an HMAC-signed cookie session ("sk_session"). All write
+ *     endpoints and the unmasked admin info require it.
+ *
+ * Monitor persistence
+ *   - If SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are set, monitors are
+ *     persisted in the public.status_monitors table.
+ *   - Otherwise the server falls back to in-memory defaults (read-only seed).
+ *   - On first boot with an empty table, the default AI Assessor monitors
+ *     are seeded automatically.
+ */
+
 const express = require('express');
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 const axios = require('axios');
+const bcrypt = require('bcryptjs');
+
 const app = express();
 const port = parseInt(process.env.PORT, 10) || 3001;
 const host = '0.0.0.0';
-const adminFile = path.join(__dirname, 'admin.json');
-const monitorsFile = path.join(__dirname, 'monitors.json');
 
-// Real AI Assessor Monitors
+// ───────── Config ─────────
+const ADMIN_USERNAME = process.env.ADMIN_USERNAME || 'luckoptimizer';
+// bcrypt hash for password "luckoptimizer" — used only if ADMIN_PASSWORD_HASH is unset.
+const FALLBACK_HASH = '$2b$10$IAZxM9mpKkXHHH4YBxXX5OsG9A.Aiifa44BpLfAfRGMycwZM1pjN.';
+const ADMIN_PASSWORD_HASH = process.env.ADMIN_PASSWORD_HASH || FALLBACK_HASH;
+
+const SESSION_SECRET = process.env.SESSION_SECRET ||
+  crypto.randomBytes(32).toString('hex'); // ephemeral if unset; rotates on every restart
+const SESSION_COOKIE = 'sk_session';
+const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
+
+const SUPABASE_URL = process.env.SUPABASE_URL || '';
+const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
+const supabaseEnabled = Boolean(SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY);
+
+// ───────── Default monitors (seeded on first boot) ─────────
 const defaultMonitors = [
   {
-    id: 1,
-    name: 'AI Assessor Main App',
-    type: 'http',
+    id: 'aiassessor-web',
+    name: 'AI Assessor — Web Application',
+    type: 'HTTP',
     target: 'https://aiassessorplatformdesign-qsb9.vercel.app',
-    interval: 60,
+    interval_seconds: 60,
     paused: false
   },
   {
-    id: 2,
-    name: 'Supabase Health Check',
-    type: 'http',
-    target: 'https://ctxcznwnjliuywwucamr.supabase.co/functions/v1/health-import',
-    interval: 60,
+    id: 'aiassessor-marketing',
+    name: 'AI Assessor — Marketing Site',
+    type: 'HTTP',
+    target: 'https://www.aiassessor.ca',
+    interval_seconds: 60,
     paused: false
   },
   {
-    id: 3,
-    name: 'n8n Automation Engine',
-    type: 'http',
-    target: 'https://your-n8n.onrender.com',
-    interval: 120,
+    id: 'supabase-edge',
+    name: 'AI Assessor — Supabase Edge Functions',
+    type: 'HTTP',
+    target: 'https://ctxcznwnjliuywwucamr.supabase.co/functions/v1/health',
+    interval_seconds: 60,
     paused: false
   },
   {
-    id: 4,
-    name: 'Database Health',
-    type: 'database',
-    target: 'postgres',
-    interval: 300,
+    id: 'supabase-auth',
+    name: 'AI Assessor — Supabase Auth API',
+    type: 'HTTP',
+    target: 'https://ctxcznwnjliuywwucamr.supabase.co/auth/v1/health',
+    interval_seconds: 60,
+    paused: false
+  },
+  {
+    id: 'status-self',
+    name: 'AI Assessor — Status Page',
+    type: 'HTTP',
+    target: 'https://status.aiassessor.ca/api/health',
+    interval_seconds: 60,
     paused: false
   }
 ];
 
-function isAdminCreated() {
-  return fs.existsSync(adminFile);
+let inMemoryMonitors = defaultMonitors.map((m) => ({ ...m }));
+
+// ───────── Middleware ─────────
+app.use(express.json({ limit: '256kb' }));
+app.use(express.urlencoded({ extended: true, limit: '256kb' }));
+
+// trust X-Forwarded-Proto on Render so cookies get Secure flag right
+app.set('trust proxy', 1);
+
+// ───────── Sessions (HMAC cookie) ─────────
+function signSession(payload) {
+  const body = JSON.stringify(payload);
+  const b64 = Buffer.from(body).toString('base64url');
+  const mac = crypto.createHmac('sha256', SESSION_SECRET).update(b64).digest('base64url');
+  return `${b64}.${mac}`;
 }
 
-function getAdmin() {
-  if (!isAdminCreated()) return null;
+function verifySession(token) {
+  if (!token || typeof token !== 'string' || !token.includes('.')) return null;
+  const [b64, mac] = token.split('.');
+  const expected = crypto.createHmac('sha256', SESSION_SECRET).update(b64).digest('base64url');
+  const a = Buffer.from(mac);
+  const b = Buffer.from(expected);
+  if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) return null;
   try {
-    return JSON.parse(fs.readFileSync(adminFile, 'utf-8'));
-  } catch (error) {
-    console.error('Failed to read admin file:', error);
+    const payload = JSON.parse(Buffer.from(b64, 'base64url').toString('utf8'));
+    if (!payload || typeof payload !== 'object') return null;
+    if (payload.exp && Date.now() > payload.exp) return null;
+    return payload;
+  } catch {
     return null;
   }
 }
 
-function loadMonitors() {
-  if (!fs.existsSync(monitorsFile)) {
-    return defaultMonitors;
-  }
-
-  try {
-    return JSON.parse(fs.readFileSync(monitorsFile, 'utf-8')) || defaultMonitors;
-  } catch (error) {
-    console.error('Failed to read monitors file:', error);
-    return defaultMonitors;
-  }
+function parseCookies(req) {
+  const header = req.headers.cookie;
+  if (!header) return {};
+  return header.split(';').reduce((acc, part) => {
+    const idx = part.indexOf('=');
+    if (idx < 0) return acc;
+    const k = part.slice(0, idx).trim();
+    const v = part.slice(idx + 1).trim();
+    acc[k] = decodeURIComponent(v);
+    return acc;
+  }, {});
 }
 
-function saveMonitors(monitors) {
-  try {
-    fs.writeFileSync(monitorsFile, JSON.stringify(monitors, null, 2), 'utf-8');
-    return true;
-  } catch (error) {
-    console.error('Failed to write monitors file:', error);
-    return false;
-  }
+function getSession(req) {
+  const cookies = parseCookies(req);
+  const token = cookies[SESSION_COOKIE];
+  return verifySession(token);
 }
 
-async function performMonitorCheck(monitor) {
-  const type = (monitor.type || '').toString().toLowerCase();
-  const result = {
-    ...monitor,
-    status: 'offline',
-    responseTimeMs: null,
-    lastChecked: new Date().toISOString(),
-    paused: monitor.paused === true
+function setSessionCookie(res, payload) {
+  const token = signSession(payload);
+  const isProd = process.env.NODE_ENV === 'production';
+  const parts = [
+    `${SESSION_COOKIE}=${encodeURIComponent(token)}`,
+    'Path=/',
+    'HttpOnly',
+    'SameSite=Lax',
+    `Max-Age=${Math.floor(SESSION_TTL_MS / 1000)}`
+  ];
+  if (isProd) parts.push('Secure');
+  res.setHeader('Set-Cookie', parts.join('; '));
+}
+
+function clearSessionCookie(res) {
+  const isProd = process.env.NODE_ENV === 'production';
+  const parts = [
+    `${SESSION_COOKIE}=`,
+    'Path=/',
+    'HttpOnly',
+    'SameSite=Lax',
+    'Max-Age=0'
+  ];
+  if (isProd) parts.push('Secure');
+  res.setHeader('Set-Cookie', parts.join('; '));
+}
+
+function requireAuth(req, res, next) {
+  const session = getSession(req);
+  if (!session || session.user !== ADMIN_USERNAME) {
+    return res.status(401).json({ error: 'Authentication required' });
+  }
+  req.session = session;
+  next();
+}
+
+// ───────── Supabase persistence ─────────
+function supabaseHeaders() {
+  return {
+    apikey: SUPABASE_SERVICE_ROLE_KEY,
+    Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
+    'Content-Type': 'application/json'
   };
-
-  if (result.paused) {
-    result.status = 'paused';
-    return result;
-  }
-
-  if (type === 'http') {
-    const start = Date.now();
-
-    try {
-      const response = await axios.get(monitor.target, {
-        timeout: 8000,
-        validateStatus: () => true
-      });
-      result.responseTimeMs = Date.now() - start;
-      result.status = response.status >= 200 && response.status < 400 ? 'online' : 'offline';
-    } catch (error) {
-      result.responseTimeMs = Date.now() - start;
-      result.status = 'offline';
-    }
-  } else if (type === 'tls') {
-    const target = monitor.target.startsWith('http') ? monitor.target : `https://${monitor.target}`;
-    const start = Date.now();
-
-    try {
-      const response = await axios.get(target, {
-        timeout: 8000,
-        validateStatus: () => true
-      });
-      result.responseTimeMs = Date.now() - start;
-      result.status = response.status >= 200 && response.status < 400 ? 'online' : 'offline';
-    } catch (error) {
-      result.responseTimeMs = Date.now() - start;
-      result.status = 'offline';
-    }
-  } else if (type === 'database') {
-    try {
-      fs.accessSync(monitor.target, fs.constants.R_OK);
-      result.status = 'online';
-      result.responseTimeMs = 0;
-    } catch (error) {
-      result.status = 'degraded';
-      result.responseTimeMs = null;
-    }
-  } else {
-    result.responseTimeMs = null;
-    result.status = 'offline';
-  }
-
-  return result;
 }
 
-app.use(express.json());
-
-// Serve static files from dist folder
-app.use(express.static(path.join(__dirname, '../dist')));
-
-// API endpoint for creating first admin
-app.post('/api/admin/create', (req, res) => {
-  const { username, password } = req.body;
-
-  if (isAdminCreated()) {
-    return res.status(400).json({ error: 'Admin account already exists' });
-  }
-
-  if (!username || !password) {
-    return res.status(400).json({ error: 'Username and password required' });
-  }
-
+async function loadMonitorsFromStore() {
+  if (!supabaseEnabled) return inMemoryMonitors;
   try {
-    fs.writeFileSync(adminFile, JSON.stringify({ username, password }, null, 2), 'utf-8');
-    return res.json({ success: true, message: 'Admin created successfully', username });
+    const url = `${SUPABASE_URL}/rest/v1/status_monitors?select=*&order=created_at.asc`;
+    const response = await axios.get(url, {
+      headers: supabaseHeaders(),
+      timeout: 6000,
+      validateStatus: () => true
+    });
+    if (response.status === 200) {
+      if (!Array.isArray(response.data) || response.data.length === 0) {
+        await seedDefaultMonitors();
+        return defaultMonitors.map((m) => ({ ...m }));
+      }
+      return response.data;
+    }
+    console.error('[supabase] loadMonitors non-200:', response.status, response.data);
+    return inMemoryMonitors;
   } catch (error) {
-    console.error('Failed to create admin:', error);
-    return res.status(500).json({ error: 'Failed to create admin account' });
+    console.error('[supabase] loadMonitors failed:', error.message);
+    return inMemoryMonitors;
   }
-});
+}
 
-app.get('/api/admin/exists', (req, res) => {
-  res.json({ exists: isAdminCreated() });
-});
-
-app.get('/api/admin', (req, res) => {
-  const admin = getAdmin();
-  if (!admin) {
-    return res.status(404).json({ error: 'Admin not found' });
+async function seedDefaultMonitors() {
+  if (!supabaseEnabled) return;
+  try {
+    const url = `${SUPABASE_URL}/rest/v1/status_monitors`;
+    await axios.post(url, defaultMonitors, {
+      headers: supabaseHeaders(),
+      timeout: 6000,
+      validateStatus: () => true
+    });
+    console.log('[supabase] seeded', defaultMonitors.length, 'default monitors');
+  } catch (error) {
+    console.error('[supabase] seed failed:', error.message);
   }
-  res.json({ username: admin.username });
-});
+}
 
-app.get('/api/dashboard', async (req, res) => {
-  const admin = getAdmin();
-  const rawMonitors = loadMonitors();
-  const checks = await Promise.all(rawMonitors.map(performMonitorCheck));
-  const activeChecks = checks.filter((item) => item.status === 'online' || item.status === 'degraded').length;
-  const alerts = checks.filter((item) => item.status !== 'online' && item.status !== 'paused').length;
-  const pausedCount = checks.filter((item) => item.status === 'paused').length;
-
-  res.json({
-    status: 'online',
-    uptimeSeconds: Math.floor(process.uptime()),
-    adminUser: admin?.username || null,
-    nodeVersion: process.version,
-    platform: process.platform,
-    monitoredServices: checks.length,
-    activeChecks,
-    alerts,
-    pausedMonitors: pausedCount,
-    lastUpdated: new Date().toISOString()
+async function upsertMonitorInStore(monitor) {
+  if (!supabaseEnabled) {
+    const idx = inMemoryMonitors.findIndex((m) => m.id === monitor.id);
+    if (idx >= 0) inMemoryMonitors[idx] = monitor;
+    else inMemoryMonitors.unshift(monitor);
+    return monitor;
+  }
+  const url = `${SUPABASE_URL}/rest/v1/status_monitors?on_conflict=id`;
+  const response = await axios.post(url, monitor, {
+    headers: { ...supabaseHeaders(), Prefer: 'resolution=merge-duplicates,return=representation' },
+    timeout: 6000,
+    validateStatus: () => true
   });
-});
-
-app.get('/api/monitors', async (req, res) => {
-  const rawMonitors = loadMonitors();
-  const monitors = await Promise.all(rawMonitors.map(performMonitorCheck));
-  res.json({ monitors });
-});
-
-app.post('/api/monitors', async (req, res) => {
-  const { name, target, type } = req.body;
-
-  if (!name || !target || !type) {
-    return res.status(400).json({ error: 'Name, target, and type are required' });
+  if (response.status >= 400) {
+    throw new Error(`supabase upsert failed: ${response.status} ${JSON.stringify(response.data)}`);
   }
+  return Array.isArray(response.data) ? response.data[0] : response.data;
+}
 
-  const validTypes = ['HTTP', 'TLS', 'Database'];
-  if (!validTypes.includes(type)) {
-    return res.status(400).json({ error: 'Type must be one of HTTP, TLS, Database' });
+async function deleteMonitorInStore(id) {
+  if (!supabaseEnabled) {
+    inMemoryMonitors = inMemoryMonitors.filter((m) => m.id !== id);
+    return;
   }
-
-  const monitors = loadMonitors();
-  const id = `monitor-${Date.now()}`;
-  const monitor = {
-    id,
-    name,
-    target,
-    type,
-    paused: false,
-    status: 'pending',
-    responseTimeMs: null,
-    lastChecked: new Date().toISOString()
-  };
-
-  const checkedMonitor = await performMonitorCheck(monitor);
-  monitors.unshift(checkedMonitor);
-
-  if (!saveMonitors(monitors)) {
-    return res.status(500).json({ error: 'Failed to save monitor' });
+  const url = `${SUPABASE_URL}/rest/v1/status_monitors?id=eq.${encodeURIComponent(id)}`;
+  const response = await axios.delete(url, {
+    headers: supabaseHeaders(),
+    timeout: 6000,
+    validateStatus: () => true
+  });
+  if (response.status >= 400) {
+    throw new Error(`supabase delete failed: ${response.status}`);
   }
+}
 
-  res.json({ monitor: checkedMonitor });
-});
-
-app.put('/api/monitors/:id', async (req, res) => {
-  const { id } = req.params;
-  const { name, target, type, paused } = req.body;
-  const validTypes = ['HTTP', 'TLS', 'Database'];
-
-  if (!name || !target || !type) {
-    return res.status(400).json({ error: 'Name, target, and type are required' });
+// ───────── Probe runner ─────────
+async function probeMonitor(monitor) {
+  if (monitor.paused) {
+    return { last_status: 'paused', last_response_time_ms: null };
   }
-
-  if (paused !== undefined && typeof paused !== 'boolean') {
-    return res.status(400).json({ error: 'Paused must be true or false' });
+  const type = (monitor.type || '').toString().toLowerCase();
+  const start = Date.now();
+  try {
+    if (type === 'http' || type === 'tls' || type === 'https') {
+      const target = monitor.target.startsWith('http')
+        ? monitor.target
+        : `https://${monitor.target}`;
+      const res = await axios.get(target, {
+        timeout: 9000,
+        validateStatus: () => true,
+        maxRedirects: 5
+      });
+      const ms = Date.now() - start;
+      const ok = res.status >= 200 && res.status < 400;
+      const degraded = ms > 3000;
+      return {
+        last_status: ok ? (degraded ? 'degraded' : 'up') : 'down',
+        last_response_time_ms: ms
+      };
+    }
+    return { last_status: 'unknown', last_response_time_ms: null };
+  } catch (error) {
+    return {
+      last_status: 'down',
+      last_response_time_ms: Date.now() - start
+    };
   }
+}
 
-  if (!validTypes.includes(type)) {
-    return res.status(400).json({ error: 'Type must be one of HTTP, TLS, Database' });
+async function refreshAllMonitors() {
+  const monitors = await loadMonitorsFromStore();
+  const updated = await Promise.all(
+    monitors.map(async (m) => {
+      const probe = await probeMonitor(m);
+      const next = {
+        ...m,
+        last_status: probe.last_status,
+        last_response_time_ms: probe.last_response_time_ms,
+        last_checked_at: new Date().toISOString()
+      };
+      try {
+        await upsertMonitorInStore(next);
+      } catch (e) {
+        console.error('[probe] upsert failed for', m.id, e.message);
+      }
+      return next;
+    })
+  );
+  return updated;
+}
+
+function summarizeStatus(monitors) {
+  const counts = { up: 0, down: 0, degraded: 0, paused: 0 };
+  for (const m of monitors) {
+    if (m.paused) { counts.paused += 1; continue; }
+    const s = (m.last_status || '').toLowerCase();
+    if (s === 'up' || s === 'online' || s === 'ok') counts.up += 1;
+    else if (s === 'degraded' || s === 'warn') counts.degraded += 1;
+    else if (s === 'down' || s === 'offline' || s === 'error') counts.down += 1;
   }
+  return counts;
+}
 
-  const monitors = loadMonitors();
-  const index = monitors.findIndex((item) => item.id === id);
-
-  if (index === -1) {
-    return res.status(404).json({ error: 'Monitor not found' });
-  }
-
-  monitors[index] = {
-    ...monitors[index],
-    name,
-    target,
-    type,
-    paused: paused === true
-  };
-
-  const updatedMonitor = await performMonitorCheck(monitors[index]);
-  monitors[index] = updatedMonitor;
-
-  if (!saveMonitors(monitors)) {
-    return res.status(500).json({ error: 'Failed to save monitor' });
-  }
-
-  res.json({ monitor: updatedMonitor });
-});
-
-app.delete('/api/monitors/:id', (req, res) => {
-  const { id } = req.params;
-  const monitors = loadMonitors();
-  const index = monitors.findIndex((item) => item.id === id);
-
-  if (index === -1) {
-    return res.status(404).json({ error: 'Monitor not found' });
-  }
-
-  monitors.splice(index, 1);
-
-  if (!saveMonitors(monitors)) {
-    return res.status(500).json({ error: 'Failed to delete monitor' });
-  }
-
-  res.json({ success: true });
-});
-
-// API health check
+// ───────── Public endpoints ─────────
 app.get('/api/health', (req, res) => {
-  res.json({ status: 'running' });
+  res.json({ ok: true, service: 'status.aiassessor.ca', time: new Date().toISOString() });
 });
 
-// SPA fallback - serve index.html for all non-API routes
-app.get('*', (req, res) => {
-  res.sendFile(path.join(__dirname, '../dist/index.html'));
+// Legacy compatibility — UI used to use this to decide "create admin" vs "login".
+app.get('/api/admin/exists', (req, res) => {
+  res.json({ exists: true, mode: 'env' });
 });
 
-app.listen(port, host, () => {
-  console.log(`Server running on port ${port}`);
+app.get('/api/session', (req, res) => {
+  const session = getSession(req);
+  res.json({ authenticated: Boolean(session && session.user === ADMIN_USERNAME) });
+});
+
+app.post('/api/login', async (req, res) => {
+  try {
+    const { username, password } = req.body || {};
+    if (!username || !password) {
+      return res.status(400).json({ error: 'Username and password are required.' });
+    }
+    if (username !== ADMIN_USERNAME) {
+      // dummy compare to keep timing-similar
+      await bcrypt.compare(password, FALLBACK_HASH);
+      return res.status(401).json({ error: 'Invalid credentials.' });
+    }
+    const ok = await bcrypt.compare(password, ADMIN_PASSWORD_HASH);
+    if (!ok) {
+      return res.status(401).json({ error: 'Invalid credentials.' });
+    }
+    setSessionCookie(res, {
+      user: ADMIN_USERNAME,
+      iat: Date.now(),
+      exp: Date.now() + SESSION_TTL_MS
+    });
+    return res.json({ ok: true, username: ADMIN_USERNAME });
+  } catch (error) {
+    console.error('[login] failed:', error.message);
+    return res.status(500).json({ error: 'Login failed.' });
+  }
+});
+
+app.post('/api/logout', (req, res) => {
+  clearSessionCookie(res);
+  res.json({ ok: true });
+});
+
+// Compatibility shim — legacy clients may call /api/admin/create. Treat as login.
+app.post('/api/admin/create', async (req, res) => {
+  return app._router.handle({ ...req, url: '/api/login', originalUrl: '/api/login' }, res, () => {});
+});
+
+// ───────── Authenticated endpoints ─────────
+app.get('/api/admin', requireAuth, (req, res) => {
+  res.json({ username: ADMIN_USERNAME });
+});
+
+app.get('/api/dashboard', requireAuth, async (req, res) => {
+  try {
+    const monitors = await refreshAllMonitors();
+    res.json({ monitors, status: summarizeStatus(monitors) });
+  } catch (error) {
+    console.error('[dashboard] failed:', error.message);
+    res.status(500).json({ error: 'Failed to load dashboard.' });
+  }
+});
+
+app.get('/api/monitors', requireAuth, async (req, res) => {
+  try {
+    const monitors = await loadMonitorsFromStore();
+    res.json({ monitors });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+const VALID_TYPES = ['HTTP', 'TLS', 'Database'];
+
+app.post('/api/monitors', requireAuth, async (req, res) => {
+  try {
+    const body = req.body || {};
+    if (!body.name || !body.target) {
+      return res.status(400).json({ error: 'name and target are required' });
+    }
+    const type = VALID_TYPES.includes(body.type) ? body.type : 'HTTP';
+    const monitor = {
+      id: body.id || crypto.randomBytes(6).toString('hex'),
+      name: String(body.name),
+      target: String(body.target),
+      type,
+      interval_seconds: parseInt(body.interval_seconds, 10) || 60,
+      paused: Boolean(body.paused)
+    };
+    const saved = await upsertMonitorInStore(monitor);
+    res.json({ monitor: saved });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.put('/api/monitors/:id', requireAuth, async (req, res) => {
+  try {
+    const body = req.body || {};
+    if (!body.name || !body.target) {
+      return res.status(400).json({ error: 'name and target are required' });
+    }
+    const type = VALID_TYPES.includes(body.type) ? body.type : 'HTTP';
+    const monitor = {
+      id: req.params.id,
+      name: String(body.name),
+      target: String(body.target),
+      type,
+      interval_seconds: parseInt(body.interval_seconds, 10) || 60,
+      paused: Boolean(body.paused),
+      last_status: body.last_status || null,
+      last_response_time_ms: body.last_response_time_ms != null ? parseInt(body.last_response_time_ms, 10) : null,
+      last_checked_at: body.last_checked_at || null
+    };
+    const saved = await upsertMonitorInStore(monitor);
+    res.json({ monitor: saved });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.delete('/api/monitors/:id', requireAuth, async (req, res) => {
+  try {
+    await deleteMonitorInStore(req.params.id);
+    res.json({ ok: true });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ───────── Static frontend ─────────
+const distDir = path.join(__dirname, '..', 'dist');
+if (fs.existsSync(distDir)) {
+  app.use(express.static(distDir));
+  app.get('*', (req, res, next) => {
+    if (req.path.startsWith('/api/')) return next();
+    res.sendFile(path.join(distDir, 'index.html'));
+  });
+} else {
+  console.warn('[startup] dist/ not found — frontend will not be served. Run `npm run build`.');
+}
+
+// ───────── Boot ─────────
+app.listen(port, host, async () => {
+  console.log(`[startup] status.aiassessor.ca listening on http://${host}:${port}`);
+  console.log(`[startup] supabase: ${supabaseEnabled ? 'enabled' : 'disabled (in-memory only)'}`);
+  console.log(`[startup] admin user: ${ADMIN_USERNAME}`);
+  if (ADMIN_PASSWORD_HASH === FALLBACK_HASH) {
+    console.warn('[startup] WARNING: using fallback password hash. Set ADMIN_PASSWORD_HASH in env.');
+  }
+  if (!process.env.SESSION_SECRET) {
+    console.warn('[startup] WARNING: SESSION_SECRET not set — sessions will invalidate on every restart.');
+  }
+  // Warm up monitors in the background; don't block boot.
+  refreshAllMonitors().catch((err) => console.error('[startup] initial probe failed:', err.message));
 });
