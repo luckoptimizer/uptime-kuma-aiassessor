@@ -119,6 +119,114 @@ const defaultMonitors = [
     expect_contains: 'modelTopology'
   },
   {
+    id: 'aiassessor-model-saskatchewan',
+    name: 'AI Assessor — Saskatchewan ML Model (on-device)',
+    type: 'HTTP',
+    target: 'https://aiassessorplatformdesign-qsb9.vercel.app/tfjs_saskatchewan_model/model.json',
+    interval_seconds: 60,
+    paused: false,
+    expect_contains: 'modelTopology'
+  },
+  {
+    id: 'aiassessor-model-manitoba',
+    name: 'AI Assessor — Manitoba ML Model (on-device)',
+    type: 'HTTP',
+    target: 'https://aiassessorplatformdesign-qsb9.vercel.app/tfjs_manitoba_model/model.json',
+    interval_seconds: 60,
+    paused: false,
+    expect_contains: 'modelTopology'
+  },
+  {
+    id: 'aiassessor-model-ontario',
+    name: 'AI Assessor — Ontario ML Model (on-device)',
+    type: 'HTTP',
+    target: 'https://aiassessorplatformdesign-qsb9.vercel.app/tfjs_ontario_model/model.json',
+    interval_seconds: 60,
+    paused: false,
+    expect_contains: 'modelTopology'
+  },
+  {
+    id: 'aiassessor-model-quebec',
+    name: 'AI Assessor — Quebec ML Model (on-device)',
+    type: 'HTTP',
+    target: 'https://aiassessorplatformdesign-qsb9.vercel.app/tfjs_quebec_model/model.json',
+    interval_seconds: 60,
+    paused: false,
+    expect_contains: 'modelTopology'
+  },
+  {
+    id: 'aiassessor-model-newbrunswick',
+    name: 'AI Assessor — New Brunswick ML Model (on-device)',
+    type: 'HTTP',
+    target: 'https://aiassessorplatformdesign-qsb9.vercel.app/tfjs_newbrunswick_model/model.json',
+    interval_seconds: 60,
+    paused: false,
+    expect_contains: 'modelTopology'
+  },
+  {
+    id: 'aiassessor-model-novascotia',
+    name: 'AI Assessor — Nova Scotia ML Model (on-device)',
+    type: 'HTTP',
+    target: 'https://aiassessorplatformdesign-qsb9.vercel.app/tfjs_novascotia_model/model.json',
+    interval_seconds: 60,
+    paused: false,
+    expect_contains: 'modelTopology'
+  },
+  {
+    id: 'aiassessor-model-pei',
+    name: 'AI Assessor — Prince Edward Island ML Model (on-device)',
+    type: 'HTTP',
+    target: 'https://aiassessorplatformdesign-qsb9.vercel.app/tfjs_pei_model/model.json',
+    interval_seconds: 60,
+    paused: false,
+    expect_contains: 'modelTopology'
+  },
+  {
+    id: 'aiassessor-model-newfoundland',
+    name: 'AI Assessor — Newfoundland & Labrador ML Model (on-device)',
+    type: 'HTTP',
+    target: 'https://aiassessorplatformdesign-qsb9.vercel.app/tfjs_newfoundland_model/model.json',
+    interval_seconds: 60,
+    paused: false,
+    expect_contains: 'modelTopology'
+  },
+  {
+    id: 'aiassessor-model-bc',
+    name: 'AI Assessor — British Columbia ML Model (on-device)',
+    type: 'HTTP',
+    target: 'https://aiassessorplatformdesign-qsb9.vercel.app/tfjs_bc_model/model.json',
+    interval_seconds: 60,
+    paused: false,
+    expect_contains: 'modelTopology'
+  },
+  {
+    id: 'aiassessor-model-yukon',
+    name: 'AI Assessor — Yukon ML Model (on-device)',
+    type: 'HTTP',
+    target: 'https://aiassessorplatformdesign-qsb9.vercel.app/tfjs_yukon_model/model.json',
+    interval_seconds: 60,
+    paused: false,
+    expect_contains: 'modelTopology'
+  },
+  {
+    id: 'aiassessor-model-northwestterritories',
+    name: 'AI Assessor — Northwest Territories ML Model (on-device)',
+    type: 'HTTP',
+    target: 'https://aiassessorplatformdesign-qsb9.vercel.app/tfjs_northwestterritories_model/model.json',
+    interval_seconds: 60,
+    paused: false,
+    expect_contains: 'modelTopology'
+  },
+  {
+    id: 'aiassessor-model-nunavut',
+    name: 'AI Assessor — Nunavut ML Model (on-device)',
+    type: 'HTTP',
+    target: 'https://aiassessorplatformdesign-qsb9.vercel.app/tfjs_nunavut_model/model.json',
+    interval_seconds: 60,
+    paused: false,
+    expect_contains: 'modelTopology'
+  },
+  {
     id: 'status-self',
     name: 'AI Assessor — Status Page',
     type: 'HTTP',
