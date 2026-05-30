@@ -67,6 +67,7 @@ For frontend hot-reload run `npm run dev` (Vite) in one terminal and `npm start`
 
 Public:
 - `GET /api/health` — liveness probe
+- `GET /api/public/status` — **read-only status board** (monitors + summary). No auth. This is what the public landing page renders. The `?apikey=` query string is stripped from each monitor target before it is exposed.
 - `GET /api/admin/exists` — always `{exists:true, mode:'env'}` (legacy compatibility)
 - `GET /api/session` — `{authenticated:boolean}`
 - `POST /api/login` — `{username, password}` → sets session cookie
@@ -88,3 +89,25 @@ Authenticated (session cookie required):
 - Protected mutating endpoints behind `requireAuth`. Previously `/api/admin` leaked the username publicly.
 - Moved monitor state to Supabase so it survives redeploys and free-plan disk wipes.
 - Removed unused deps (socket.io, sqlite3, redbean-node).
+
+## Public status board (no login)
+
+The status board is now **public** — visitors see live monitor health without an account. Login still exists, but only gates *management* (add / edit / pause / delete). Admins reach it via the **Admin** button in the top bar.
+
+- `GET /api/public/status` serves a cached snapshot maintained by a server-side probe loop (every `PROBE_INTERVAL_MS`, default 60s), so page views never trigger live probing and the board stays fresh even when nobody is logged in.
+- The probe runner sends **no auth headers**, so every monitor target must return 2xx/3xx unauthenticated. The Supabase Auth health check therefore appends the **public anon key** (`?apikey=`) — that key already ships in the client bundle, so it is safe to expose; it is stripped from the public API response regardless.
+
+### Monitors
+
+Eight default monitors (seeded on first boot, mirrored in the live `status_monitors` table):
+
+| id | target | covers |
+|---|---|---|
+| aiassessor-web | Vercel app | the actual valuation SPA |
+| aiassessor-marketing | www.aiassessor.ca | marketing site |
+| aiassessor-apex | aiassessor.ca | apex DNS / redirect |
+| aiassessor-backend | functions/v1/make-server-1f5b90ba/health | Stripe checkout, analytics, KV — the SLA-critical backend |
+| supabase-edge | functions/v1/health | edge function runtime |
+| supabase-auth | auth/v1/health?apikey=… | GoTrue auth API |
+| supabase-storage | storage/v1/status | Supabase Storage |
+| status-self | status.aiassessor.ca/api/health | this status page itself |

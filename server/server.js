@@ -44,6 +44,14 @@ const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
 const supabaseEnabled = Boolean(SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY);
 
 // ───────── Default monitors (seeded on first boot) ─────────
+// NOTE: the probe runner sends NO auth headers, so every target here must
+// return a 2xx/3xx status WITHOUT credentials, or it will read as "down".
+// The Supabase auth target uses the public anon key (?apikey=) — that key is
+// shipped in the client bundle and is safe to expose; it makes the otherwise
+// 401-gated GoTrue health endpoint return 200.
+const SUPABASE_ANON_KEY =
+  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImN0eGN6bnduamxpdXl3d3VjYW1yIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTkyNzM3MDUsImV4cCI6MjA3NDg0OTcwNX0.0am4tJpl16Lyls96WzkuFErrrAmtH3LB0Z7gIpCTVVc';
+
 const defaultMonitors = [
   {
     id: 'aiassessor-web',
@@ -62,6 +70,22 @@ const defaultMonitors = [
     paused: false
   },
   {
+    id: 'aiassessor-apex',
+    name: 'AI Assessor — Apex Domain',
+    type: 'HTTP',
+    target: 'https://aiassessor.ca',
+    interval_seconds: 60,
+    paused: false
+  },
+  {
+    id: 'aiassessor-backend',
+    name: 'AI Assessor — Backend API (Stripe & Analytics)',
+    type: 'HTTP',
+    target: 'https://ctxcznwnjliuywwucamr.supabase.co/functions/v1/make-server-1f5b90ba/health',
+    interval_seconds: 60,
+    paused: false
+  },
+  {
     id: 'supabase-edge',
     name: 'AI Assessor — Supabase Edge Functions',
     type: 'HTTP',
@@ -73,7 +97,15 @@ const defaultMonitors = [
     id: 'supabase-auth',
     name: 'AI Assessor — Supabase Auth API',
     type: 'HTTP',
-    target: 'https://ctxcznwnjliuywwucamr.supabase.co/auth/v1/health',
+    target: `https://ctxcznwnjliuywwucamr.supabase.co/auth/v1/health?apikey=${SUPABASE_ANON_KEY}`,
+    interval_seconds: 60,
+    paused: false
+  },
+  {
+    id: 'supabase-storage',
+    name: 'AI Assessor — Supabase Storage',
+    type: 'HTTP',
+    target: 'https://ctxcznwnjliuywwucamr.supabase.co/storage/v1/status',
     interval_seconds: 60,
     paused: false
   },
@@ -293,6 +325,11 @@ async function probeMonitor(monitor) {
   }
 }
 
+// Most recent probe results, cached so the public status board can be served
+// without re-probing every target on every page view. Updated by the probe
+// loop and by any dashboard refresh.
+let statusSnapshot = { monitors: [], status: { up: 0, down: 0, degraded: 0, paused: 0 }, refreshed_at: null };
+
 async function refreshAllMonitors() {
   const monitors = await loadMonitorsFromStore();
   const updated = await Promise.all(
@@ -312,7 +349,39 @@ async function refreshAllMonitors() {
       return next;
     })
   );
+  statusSnapshot = {
+    monitors: updated,
+    status: summarizeStatus(updated),
+    refreshed_at: new Date().toISOString()
+  };
   return updated;
+}
+
+// Strip fields that should not be exposed on the public, unauthenticated board.
+// Notably: drop any query string from the target (e.g. the ?apikey= probe param).
+function toPublicMonitor(m) {
+  let displayTarget = m.target || '';
+  const q = displayTarget.indexOf('?');
+  if (q >= 0) displayTarget = displayTarget.slice(0, q);
+  return {
+    id: m.id,
+    name: m.name,
+    type: m.type || 'HTTP',
+    target: displayTarget,
+    paused: Boolean(m.paused),
+    last_status: m.last_status || null,
+    last_response_time_ms: m.last_response_time_ms != null ? m.last_response_time_ms : null,
+    last_checked_at: m.last_checked_at || null,
+    interval_seconds: m.interval_seconds || 60
+  };
+}
+
+function publicSnapshot() {
+  return {
+    monitors: (statusSnapshot.monitors || []).map(toPublicMonitor),
+    status: statusSnapshot.status,
+    refreshed_at: statusSnapshot.refreshed_at
+  };
 }
 
 function summarizeStatus(monitors) {
@@ -340,6 +409,21 @@ app.get('/api/admin/exists', (req, res) => {
 app.get('/api/session', (req, res) => {
   const session = getSession(req);
   res.json({ authenticated: Boolean(session && session.user === ADMIN_USERNAME) });
+});
+
+// Public, read-only status board. No auth. Served from the cached snapshot
+// maintained by the probe loop, so visitors never trigger live probing.
+// If the snapshot is empty (e.g. immediately after a cold start), refresh once.
+app.get('/api/public/status', async (req, res) => {
+  try {
+    if (!statusSnapshot.refreshed_at) {
+      await refreshAllMonitors();
+    }
+    res.json(publicSnapshot());
+  } catch (error) {
+    console.error('[public/status] failed:', error.message);
+    res.status(500).json({ error: 'Failed to load status.' });
+  }
 });
 
 app.post('/api/login', async (req, res) => {
@@ -486,4 +570,14 @@ app.listen(port, host, async () => {
   }
   // Warm up monitors in the background; don't block boot.
   refreshAllMonitors().catch((err) => console.error('[startup] initial probe failed:', err.message));
+
+  // Continuous probe loop so the public board stays fresh even when no admin
+  // is logged in. (On Render's free plan the service spins down when idle, so
+  // this only runs while the service is awake — an external uptime pinger or
+  // the Starter plan is still needed for true 24/7 SLA measurement.)
+  const PROBE_INTERVAL_MS = parseInt(process.env.PROBE_INTERVAL_MS, 10) || 60000;
+  setInterval(() => {
+    refreshAllMonitors().catch((err) => console.error('[probe-loop] refresh failed:', err.message));
+  }, PROBE_INTERVAL_MS);
+  console.log(`[startup] probe loop every ${PROBE_INTERVAL_MS}ms`);
 });

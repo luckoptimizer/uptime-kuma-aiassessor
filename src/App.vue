@@ -1,61 +1,7 @@
 <template>
     <div id="app">
-        <!-- LOGIN -->
-        <div v-if="view === 'login'" class="auth-screen">
-            <div class="auth-card">
-                <div class="brand">
-                    <div class="brand-mark" aria-hidden="true">
-                        <svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
-                            <path d="M12 2v20" />
-                            <path d="M2 12h20" />
-                            <circle cx="12" cy="12" r="9" />
-                        </svg>
-                    </div>
-                    <div class="brand-text">
-                        <span class="brand-name">AI Assessor</span>
-                        <span class="brand-sub">System Status</span>
-                    </div>
-                </div>
-                <h2 class="auth-title">Sign in</h2>
-                <p class="auth-lead">Authorized personnel only. Operations control for status.aiassessor.ca.</p>
-                <form @submit.prevent="login" class="auth-form">
-                    <div class="form-group">
-                        <label for="username">Username</label>
-                        <input
-                            v-model="form.username"
-                            type="text"
-                            id="username"
-                            required
-                            autocomplete="username"
-                            placeholder="Enter username"
-                        />
-                    </div>
-                    <div class="form-group">
-                        <label for="password">Password</label>
-                        <input
-                            v-model="form.password"
-                            type="password"
-                            id="password"
-                            required
-                            autocomplete="current-password"
-                            placeholder="Enter password"
-                        />
-                    </div>
-                    <button type="submit" class="btn btn-primary btn-block" :disabled="loading">
-                        {{ loading ? 'Signing in...' : 'Sign in' }}
-                    </button>
-                </form>
-                <div v-if="error" class="alert alert-error">{{ error }}</div>
-                <div v-if="success" class="alert alert-success">{{ success }}</div>
-            </div>
-            <p class="auth-footer">
-                &copy; {{ year }} AI Assessor Inc. &middot; Edmonton, Alberta &middot;
-                <a href="https://www.aiassessor.ca" target="_blank" rel="noopener">aiassessor.ca</a>
-            </p>
-        </div>
-
-        <!-- DASHBOARD -->
-        <div v-else-if="view === 'dashboard'" class="dashboard">
+        <!-- STATUS BOARD (public — no login required to view) -->
+        <div v-if="view === 'status'" class="dashboard">
             <header class="topbar">
                 <div class="topbar-inner">
                     <div class="brand brand-compact">
@@ -72,8 +18,11 @@
                         </div>
                     </div>
                     <div class="topbar-actions">
-                        <span class="who">Signed in as <strong>{{ adminName }}</strong></span>
-                        <button class="btn btn-ghost" @click="logout" :disabled="loading">Sign out</button>
+                        <template v-if="authenticated">
+                            <span class="who">Signed in as <strong>{{ adminName }}</strong></span>
+                            <button class="btn btn-ghost" @click="logout" :disabled="loading">Sign out</button>
+                        </template>
+                        <button v-else class="btn btn-ghost btn-sm" @click="openLogin">Admin</button>
                     </div>
                 </div>
             </header>
@@ -81,9 +30,7 @@
             <main class="content">
                 <!-- Overall status banner -->
                 <section :class="['summary', `summary-${overallStatus}`]">
-                    <div class="summary-icon" aria-hidden="true">
-                        <span class="pulse"></span>
-                    </div>
+                    <div class="summary-icon" aria-hidden="true"><span class="pulse"></span></div>
                     <div class="summary-text">
                         <div class="summary-headline">{{ overallHeadline }}</div>
                         <div class="summary-sub">
@@ -99,20 +46,18 @@
                     </div>
                 </section>
 
-                <!-- Monitor management -->
+                <!-- Monitors -->
                 <section class="panel">
                     <div class="panel-head">
                         <div>
                             <h2 class="panel-title">Monitors</h2>
                             <p class="panel-sub">Probes that drive the AI Assessor 99.9% SLA dashboard.</p>
                         </div>
-                        <button class="btn btn-primary" @click="openAdd" v-if="!addOpen">
-                            + Add monitor
-                        </button>
+                        <button v-if="authenticated && !addOpen" class="btn btn-primary" @click="openAdd">+ Add monitor</button>
                     </div>
 
-                    <!-- Add / edit form -->
-                    <form v-if="addOpen" class="monitor-form" @submit.prevent="submitMonitor">
+                    <!-- Add / edit form (admin only) -->
+                    <form v-if="authenticated && addOpen" class="monitor-form" @submit.prevent="submitMonitor">
                         <div class="monitor-form-grid">
                             <div class="form-group">
                                 <label>Name</label>
@@ -136,56 +81,34 @@
                         </div>
                         <div class="monitor-form-actions">
                             <button type="button" class="btn btn-ghost" @click="closeForm">Cancel</button>
-                            <button type="submit" class="btn btn-primary" :disabled="loading">
-                                {{ editingId ? 'Save changes' : 'Create monitor' }}
-                            </button>
+                            <button type="submit" class="btn btn-primary" :disabled="loading">{{ editingId ? 'Save changes' : 'Create monitor' }}</button>
                         </div>
                     </form>
 
                     <!-- Monitor cards -->
                     <div class="monitor-grid" v-if="monitors.length">
-                        <article
-                            v-for="m in monitors"
-                            :key="m.id"
-                            :class="['monitor-card', `status-${cardStatus(m)}`]"
-                        >
+                        <article v-for="m in monitors" :key="m.id" :class="['monitor-card', `status-${cardStatus(m)}`]">
                             <div class="monitor-head">
-                                <span :class="['status-pill', `pill-${cardStatus(m)}`]">
-                                    <span class="dot"></span>
-                                    {{ statusLabel(m) }}
-                                </span>
+                                <span :class="['status-pill', `pill-${cardStatus(m)}`]"><span class="dot"></span>{{ statusLabel(m) }}</span>
                                 <span class="type-pill">{{ (m.type || 'HTTP').toUpperCase() }}</span>
                             </div>
                             <h3 class="monitor-name">{{ m.name }}</h3>
-                            <a class="monitor-target" :href="m.target.startsWith('http') ? m.target : null" target="_blank" rel="noopener">
-                                {{ m.target }}
-                            </a>
+                            <a class="monitor-target" :href="m.target.startsWith('http') ? m.target : null" target="_blank" rel="noopener">{{ m.target }}</a>
                             <div class="monitor-stats">
-                                <div class="stat">
-                                    <span class="stat-label">Response</span>
-                                    <span class="stat-value">{{ m.last_response_time_ms != null ? m.last_response_time_ms + ' ms' : '—' }}</span>
-                                </div>
-                                <div class="stat">
-                                    <span class="stat-label">Last check</span>
-                                    <span class="stat-value">{{ formatRelative(m.last_checked_at) }}</span>
-                                </div>
-                                <div class="stat">
-                                    <span class="stat-label">Interval</span>
-                                    <span class="stat-value">{{ m.interval_seconds || 60 }}s</span>
-                                </div>
+                                <div class="stat"><span class="stat-label">Response</span><span class="stat-value">{{ m.last_response_time_ms != null ? m.last_response_time_ms + ' ms' : '—' }}</span></div>
+                                <div class="stat"><span class="stat-label">Last check</span><span class="stat-value">{{ formatRelative(m.last_checked_at) }}</span></div>
+                                <div class="stat"><span class="stat-label">Interval</span><span class="stat-value">{{ m.interval_seconds || 60 }}s</span></div>
                             </div>
-                            <div class="monitor-actions">
+                            <div class="monitor-actions" v-if="authenticated">
                                 <button class="btn btn-sm btn-ghost" @click="openEdit(m)">Edit</button>
-                                <button class="btn btn-sm btn-ghost" @click="togglePause(m)">
-                                    {{ m.paused ? 'Resume' : 'Pause' }}
-                                </button>
+                                <button class="btn btn-sm btn-ghost" @click="togglePause(m)">{{ m.paused ? 'Resume' : 'Pause' }}</button>
                                 <button class="btn btn-sm btn-danger-ghost" @click="removeMonitor(m)">Delete</button>
                             </div>
                         </article>
                     </div>
                     <div v-else class="empty">
                         <div class="empty-title">No monitors yet</div>
-                        <div class="empty-sub">Click <strong>Add monitor</strong> to start probing AI Assessor services.</div>
+                        <div class="empty-sub">Monitoring data will appear here once the first probes run.</div>
                     </div>
                 </section>
 
@@ -194,12 +117,31 @@
             </main>
 
             <footer class="footer">
-                <span>
-                    AI Assessor Inc. &middot; status.aiassessor.ca &middot;
-                    SLA target 99.9% &middot;
-                    <a href="https://www.aiassessor.ca" target="_blank" rel="noopener">aiassessor.ca</a>
-                </span>
+                <span>AI Assessor Inc. &middot; status.aiassessor.ca &middot; SLA target 99.9% &middot; <a href="https://www.aiassessor.ca" target="_blank" rel="noopener">aiassessor.ca</a></span>
             </footer>
+
+            <!-- Admin login modal -->
+            <div v-if="showLogin" class="modal-overlay" @click.self="closeLogin">
+                <div class="auth-card modal-card">
+                    <h2 class="auth-title">Admin sign in</h2>
+                    <p class="auth-lead">Operations control for status.aiassessor.ca. Viewing the status board does not require an account.</p>
+                    <form @submit.prevent="login" class="auth-form">
+                        <div class="form-group">
+                            <label for="username">Username</label>
+                            <input v-model="form.username" type="text" id="username" required autocomplete="username" placeholder="Enter username" />
+                        </div>
+                        <div class="form-group">
+                            <label for="password">Password</label>
+                            <input v-model="form.password" type="password" id="password" required autocomplete="current-password" placeholder="Enter password" />
+                        </div>
+                        <div class="monitor-form-actions">
+                            <button type="button" class="btn btn-ghost" @click="closeLogin">Cancel</button>
+                            <button type="submit" class="btn btn-primary" :disabled="loading">{{ loading ? 'Signing in...' : 'Sign in' }}</button>
+                        </div>
+                    </form>
+                    <div v-if="error" class="alert alert-error">{{ error }}</div>
+                </div>
+            </div>
         </div>
 
         <!-- LOADING -->
@@ -218,7 +160,7 @@
                         <span class="brand-sub">System Status</span>
                     </div>
                 </div>
-                <p class="auth-lead" style="margin-top: 1.5rem;">Loading control panel&hellip;</p>
+                <p class="auth-lead" style="margin-top: 1.5rem;">Loading status&hellip;</p>
             </div>
         </div>
     </div>
@@ -237,6 +179,8 @@ export default {
     data() {
         return {
             view: 'loading',
+            authenticated: false,
+            showLogin: false,
             loading: false,
             error: '',
             success: '',
@@ -278,58 +222,32 @@ export default {
     },
     methods: {
         emptyDraft() {
-            return {
-                name: '',
-                target: '',
-                type: 'HTTP',
-                interval_seconds: 60,
-                paused: false
-            };
+            return { name: '', target: '', type: 'HTTP', interval_seconds: 60, paused: false };
         },
         async bootstrap() {
             try {
                 const res = await api.get('/api/session');
-                if (res.data && res.data.authenticated) {
-                    await this.loadDashboard();
-                    this.startPolling();
-                    this.view = 'dashboard';
-                } else {
-                    this.view = 'login';
-                }
-            } catch (err) {
-                this.view = 'login';
+                this.authenticated = Boolean(res.data && res.data.authenticated);
+            } catch (e) {
+                this.authenticated = false;
             }
-        },
-        async login() {
-            this.error = '';
-            this.success = '';
-            this.loading = true;
-            try {
-                await api.post('/api/login', this.form);
-                this.success = 'Signed in.';
-                this.form.password = '';
+            if (this.authenticated) {
                 await this.loadDashboard();
-                this.startPolling();
-                this.view = 'dashboard';
-            } catch (err) {
-                this.error = this.errMsg(err) || 'Invalid credentials.';
-            } finally {
-                this.loading = false;
+            } else {
+                await this.loadPublic();
             }
+            this.view = 'status';
+            this.startPolling();
         },
-        async logout() {
-            this.loading = true;
+        async loadPublic() {
             try {
-                await api.post('/api/logout');
-            } catch (e) { /* ignore */ }
-            this.stopPolling();
-            this.adminName = '';
-            this.monitors = [];
-            this.counts = { up: 0, down: 0, degraded: 0, paused: 0 };
-            this.form = { username: '', password: '' };
-            this.view = 'login';
-            this.success = 'Signed out.';
-            this.loading = false;
+                const res = await api.get('/api/public/status');
+                this.monitors = res.data.monitors || [];
+                this.counts = res.data.status || this.counts;
+                this.lastRefresh = res.data.refreshed_at ? new Date(res.data.refreshed_at) : new Date();
+            } catch (err) {
+                this.error = this.errMsg(err) || 'Failed to load status.';
+            }
         },
         async loadDashboard() {
             try {
@@ -343,23 +261,63 @@ export default {
                 this.lastRefresh = new Date();
             } catch (err) {
                 if (err.response && err.response.status === 401) {
-                    this.view = 'login';
+                    this.authenticated = false;
+                    await this.loadPublic();
                     return;
                 }
                 this.error = this.errMsg(err) || 'Failed to load dashboard.';
             }
         },
+        refresh() {
+            return this.authenticated ? this.loadDashboard() : this.loadPublic();
+        },
+        openLogin() {
+            this.error = '';
+            this.success = '';
+            this.showLogin = true;
+        },
+        closeLogin() {
+            this.showLogin = false;
+            this.error = '';
+        },
+        async login() {
+            this.error = '';
+            this.success = '';
+            this.loading = true;
+            try {
+                await api.post('/api/login', this.form);
+                this.authenticated = true;
+                this.showLogin = false;
+                this.form.password = '';
+                this.success = 'Signed in.';
+                await this.loadDashboard();
+            } catch (err) {
+                this.error = this.errMsg(err) || 'Invalid credentials.';
+            } finally {
+                this.loading = false;
+            }
+        },
+        async logout() {
+            this.loading = true;
+            try {
+                await api.post('/api/logout');
+            } catch (e) { /* ignore */ }
+            this.authenticated = false;
+            this.adminName = '';
+            this.addOpen = false;
+            this.form = { username: '', password: '' };
+            this.success = 'Signed out.';
+            await this.loadPublic();
+            this.loading = false;
+        },
         startPolling() {
             this.stopPolling();
             this.pollHandle = setInterval(() => {
-                if (this.view === 'dashboard') this.loadDashboard();
+                if (this.view === 'status') this.refresh();
             }, 30000);
         },
         stopPolling() {
-            if (this.pollHandle) {
-                clearInterval(this.pollHandle);
-                this.pollHandle = null;
-            }
+            if (this.pollHandle) { clearInterval(this.pollHandle); this.pollHandle = null; }
         },
         cardStatus(m) {
             if (m.paused) return 'paused';
@@ -388,13 +346,7 @@ export default {
         },
         openEdit(m) {
             this.editingId = m.id;
-            this.draft = {
-                name: m.name,
-                target: m.target,
-                type: m.type || 'HTTP',
-                interval_seconds: m.interval_seconds || 60,
-                paused: !!m.paused
-            };
+            this.draft = { name: m.name, target: m.target, type: m.type || 'HTTP', interval_seconds: m.interval_seconds || 60, paused: !!m.paused };
             this.addOpen = true;
         },
         closeForm() {
@@ -872,4 +824,20 @@ a:hover { text-decoration: underline; }
     .topbar-inner { flex-wrap: wrap; }
     .who { display: none; }
 }
+
+/* ───────── Admin login modal ───────── */
+.modal-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(15, 23, 42, 0.45);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 1.5rem;
+    z-index: 100;
+}
+.modal-card { max-width: 420px; width: 100%; }
+.modal-card .auth-title { margin-top: 0; }
+.btn-ghost.btn-sm { color: var(--aa-gray-500); }
+
 </style>
