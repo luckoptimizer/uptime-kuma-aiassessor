@@ -96,6 +96,7 @@ The status board is now **public** — visitors see live monitor health without 
 
 - `GET /api/public/status` serves a cached snapshot maintained by a server-side probe loop (every `PROBE_INTERVAL_MS`, default 60s), so page views never trigger live probing and the board stays fresh even when nobody is logged in.
 - The probe runner sends **no auth headers**, so every monitor target must return 2xx/3xx unauthenticated. The Supabase Auth health check therefore appends the **public anon key** (`?apikey=`) — that key already ships in the client bundle, so it is safe to expose; it is stripped from the public API response regardless.
+- **Content-aware checks:** a monitor may set `expect_contains` (text). When set, a 2xx response whose body does **not** contain that string is treated as **down**. This exists for on-device ML model artifacts: inference runs in the browser (TF.js), so there is no model server to ping — but the static `model.json`/weights must load, and the SPA returns 200 HTML for a missing file. The model monitor checks the body really is the model JSON.
 
 ### Monitors
 
@@ -110,4 +111,5 @@ Eight default monitors (seeded on first boot, mirrored in the live `status_monit
 | supabase-edge | functions/v1/health | edge function runtime |
 | supabase-auth | auth/v1/health?apikey=… | GoTrue auth API |
 | supabase-storage | storage/v1/status | Supabase Storage |
+| aiassessor-model-alberta | …/tfjs_alberta_model/model.json | the shipped **on-device Alberta ML model** — content-checked for `modelTopology`, so a missing model served as 200 HTML reads as down |
 | status-self | status.aiassessor.ca/api/health | this status page itself |

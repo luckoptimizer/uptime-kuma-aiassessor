@@ -78,6 +78,10 @@
                                 <label>Interval (seconds)</label>
                                 <input v-model.number="draft.interval_seconds" type="number" min="30" step="30" />
                             </div>
+                            <div class="form-group form-wide">
+                                <label>Expected response contains <span class="opt">(optional)</span></label>
+                                <input v-model="draft.expect_contains" placeholder="e.g. modelTopology — body must include this string or the check fails" />
+                            </div>
                         </div>
                         <div class="monitor-form-actions">
                             <button type="button" class="btn btn-ghost" @click="closeForm">Cancel</button>
@@ -222,7 +226,7 @@ export default {
     },
     methods: {
         emptyDraft() {
-            return { name: '', target: '', type: 'HTTP', interval_seconds: 60, paused: false };
+            return { name: '', target: '', type: 'HTTP', interval_seconds: 60, paused: false, expect_contains: '' };
         },
         async bootstrap() {
             try {
@@ -346,7 +350,7 @@ export default {
         },
         openEdit(m) {
             this.editingId = m.id;
-            this.draft = { name: m.name, target: m.target, type: m.type || 'HTTP', interval_seconds: m.interval_seconds || 60, paused: !!m.paused };
+            this.draft = { name: m.name, target: m.target, type: m.type || 'HTTP', interval_seconds: m.interval_seconds || 60, paused: !!m.paused, expect_contains: m.expect_contains || '' };
             this.addOpen = true;
         },
         closeForm() {
@@ -836,6 +840,7 @@ a:hover { text-decoration: underline; }
     padding: 1.5rem;
     z-index: 100;
 }
+.opt { color: var(--aa-gray-500); font-weight: 400; font-size: 0.75rem; }
 .modal-card { max-width: 420px; width: 100%; }
 .modal-card .auth-title { margin-top: 0; }
 .btn-ghost.btn-sm { color: var(--aa-gray-500); }

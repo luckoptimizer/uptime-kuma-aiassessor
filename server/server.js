@@ -110,6 +110,15 @@ const defaultMonitors = [
     paused: false
   },
   {
+    id: 'aiassessor-model-alberta',
+    name: 'AI Assessor — Alberta ML Model (on-device)',
+    type: 'HTTP',
+    target: 'https://aiassessorplatformdesign-qsb9.vercel.app/tfjs_alberta_model/model.json',
+    interval_seconds: 60,
+    paused: false,
+    expect_contains: 'modelTopology'
+  },
+  {
     id: 'status-self',
     name: 'AI Assessor — Status Page',
     type: 'HTTP',
@@ -309,7 +318,14 @@ async function probeMonitor(monitor) {
         maxRedirects: 5
       });
       const ms = Date.now() - start;
-      const ok = res.status >= 200 && res.status < 400;
+      let ok = res.status >= 200 && res.status < 400;
+      // Content check: some hosts (e.g. an SPA fallback) return 200 HTML for a
+      // missing file. If expect_contains is set, the body must contain that
+      // string or the target is treated as down even on a 2xx.
+      if (ok && monitor.expect_contains) {
+        const body = typeof res.data === 'string' ? res.data : JSON.stringify(res.data);
+        if (!body.includes(monitor.expect_contains)) ok = false;
+      }
       const degraded = ms > 3000;
       return {
         last_status: ok ? (degraded ? 'degraded' : 'up') : 'down',
@@ -502,7 +518,8 @@ app.post('/api/monitors', requireAuth, async (req, res) => {
       target: String(body.target),
       type,
       interval_seconds: parseInt(body.interval_seconds, 10) || 60,
-      paused: Boolean(body.paused)
+      paused: Boolean(body.paused),
+      expect_contains: body.expect_contains ? String(body.expect_contains) : null
     };
     const saved = await upsertMonitorInStore(monitor);
     res.json({ monitor: saved });
@@ -525,6 +542,7 @@ app.put('/api/monitors/:id', requireAuth, async (req, res) => {
       type,
       interval_seconds: parseInt(body.interval_seconds, 10) || 60,
       paused: Boolean(body.paused),
+      expect_contains: body.expect_contains ? String(body.expect_contains) : null,
       last_status: body.last_status || null,
       last_response_time_ms: body.last_response_time_ms != null ? parseInt(body.last_response_time_ms, 10) : null,
       last_checked_at: body.last_checked_at || null
